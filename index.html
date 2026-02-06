@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ thống Điểm danh Lớp 10 - Offline</title>
+    
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
+        h1 { text-align: center; color: #2c3e50; }
+        .container { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        #reader { width: 100%; max-width: 500px; border: 2px solid #ddd; border-radius: 8px; }
+        .controls { margin-top: 10px; }
+        button { padding: 10px 20px; cursor: pointer; background-color: #27ae60; color: white; border: none; border-radius: 5px; font-size: 16px; transition: 0.3s; }
+        button:hover { background-color: #219150; }
+        button#stopBtn { background-color: #c0392b; display: none; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #2980b9; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .status { color: green; font-weight: bold; }
+        #exportSection { margin-top: 20px; text-align: right; width: 100%; display: none; }
+    </style>
+</head>
+<body>
+
+    <h1>📋 Điểm Danh Lớp 10C8</h1>
+
+    <div class="container">
+        <div id="reader"></div>
+        <div id="scanResult" style="font-weight: bold; color: #2980b9; min-height: 24px;"></div>
+        
+        <div class="controls">
+            <button id="startBtn" onclick="startScanning()">📷 Bật Camera</button>
+            <button id="stopBtn" onclick="stopScanning()">⏹ Dừng Camera</button>
+        </div>
+
+        <div id="exportSection">
+            <button onclick="exportToExcel()">📥 Xuất file Excel</button>
+        </div>
+        
+        <table id="attendanceTable">
+            <thead>
+                <tr>
+                    <th>STT</th>
+                    <th>Thời gian</th>
+                    <th>Thông tin Học sinh (Từ QR)</th>
+                    <th>Trạng thái</th>
+                </tr>
+            </thead>
+            <tbody>
+                </tbody>
+        </table>
+    </div>
+
+    <script>
+        let html5QrcodeScanner;
+        let attendanceList = [];
+        
+        // --- CẤU HÌNH ÂM THANH ---
+        // Đảm bảo bạn có file 'beep.mp3' nằm cùng thư mục với file html này
+        const scanSound = new Audio('beep.mp3'); 
+
+        // 1. Hàm khởi động Camera
+        function startScanning() {
+            // Mẹo: Phát âm thanh nhỏ rồi tắt ngay để trình duyệt "mở khóa" quyền phát âm thanh trên điện thoại
+            scanSound.play().then(() => {
+                scanSound.pause();
+                scanSound.currentTime = 0;
+            }).catch(() => {}); // Bỏ qua lỗi nếu chưa có file
+
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'inline-block';
+            
+            // Khởi tạo máy quét
+            html5QrcodeScanner = new Html5Qrcode("reader");
+            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            
+            // Ưu tiên camera sau (environment)
+            html5QrcodeScanner.start({ facingMode: "environment" }, config, onScanSuccess)
+            .catch(err => {
+                alert("Lỗi khởi động camera: " + err);
+                stopScanning();
+            });
+        }
+
+        // 2. Hàm xử lý khi quét thành công
+        function onScanSuccess(decodedText, decodedResult) {
+            // Kiểm tra xem học sinh này đã điểm danh chưa
+            const alreadyChecked = attendanceList.some(item => item.info === decodedText);
+            
+            if (alreadyChecked) {
+                document.getElementById('scanResult').innerHTML = `<span style="color:orange">⚠️ ${decodedText} đã điểm danh rồi!</span>`;
+                return; // Không làm gì thêm
+            }
+
+            // --- PHÁT ÂM THANH ---
+            // Đặt lại thời gian về 0 để nếu quét liên tục vẫn kêu "bíp" từng cái rõ ràng
+            scanSound.currentTime = 0; 
+            scanSound.play().catch(e => console.log('Không thể phát âm thanh (thiếu file hoặc chưa tương tác):', e));
+
+            // Hiển thị kết quả
+            document.getElementById('scanResult').innerText = `✅ Đã nhận: ${decodedText}`;
+
+            const currentTime = new Date().toLocaleString('vi-VN');
+            
+            // Thêm vào mảng dữ liệu
+            attendanceList.push({
+                stt: attendanceList.length + 1,
+                time: currentTime,
+                info: decodedText,
+                status: "Có mặt"
+            });
+
+            updateTable();
+            
+            // Tạm dừng quét 1 chút để tránh quét trùng lặp quá nhanh (tùy chọn)
+            // html5QrcodeScanner.pause();
+            // setTimeout(() => html5QrcodeScanner.resume(), 1000);
+        }
+
+        // 3. Cập nhật bảng hiển thị
+        function updateTable() {
+            const tbody = document.querySelector("#attendanceTable tbody");
+            tbody.innerHTML = ""; // Xóa cũ
+
+            // Đảo ngược danh sách để người mới quét hiện lên đầu (tùy chọn)
+            // attendanceList.slice().reverse().forEach(...) 
+            attendanceList.forEach(student => {
+                const row = `<tr>
+                    <td>${student.stt}</td>
+                    <td>${student.time}</td>
+                    <td>${student.info}</td>
+                    <td class="status">${student.status}</td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+
+            if(attendanceList.length > 0) {
+                document.getElementById('exportSection').style.display = 'block';
+            }
+        }
+
+        // 4. Dừng Camera
+        function stopScanning() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.stop().then(() => {
+                    html5QrcodeScanner.clear(); // Dọn dẹp UI
+                    resetBtnState();
+                }).catch(err => {
+                    console.log("Lỗi dừng camera", err);
+                    resetBtnState();
+                });
+            } else {
+                resetBtnState();
+            }
+        }
+
+        function resetBtnState() {
+            document.getElementById('startBtn').style.display = 'inline-block';
+            document.getElementById('stopBtn').style.display = 'none';
+            document.getElementById('reader').innerHTML = "";
+            document.getElementById('scanResult').innerText = "";
+        }
+
+        // 5. Xuất ra Excel
+        function exportToExcel() {
+            const wb = XLSX.utils.book_new();
+            const dataForExcel = attendanceList.map(item => ({
+                "Số Thứ Tự": item.stt,
+                "Thời Gian Quét": item.time,
+                "Thông Tin Học Sinh": item.info,
+                "Trạng Thái": item.status
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(dataForExcel);
+            XLSX.utils.book_append_sheet(wb, ws, "DiemDanh");
+            const fileName = `DiemDanh_Lop10_${new Date().toISOString().slice(0,10)}.xlsx`;
+            XLSX.writeFile(wb, fileName);
+        }
+    </script>
+</body>
+</html>
